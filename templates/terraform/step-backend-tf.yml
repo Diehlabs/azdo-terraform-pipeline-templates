@@ -1,0 +1,42 @@
+#REMOVE: ensure the variables here get removed and passed in as params from a stages-* file instead if possible
+parameters:
+- name: tf_run_dir
+  type: string
+
+- name: workspace
+  type: string
+  default: $(tfe_workspace)
+
+- name: remote_backend
+  type: boolean
+  default: true
+
+- name: tfe_hostname
+  type: string
+
+steps:
+  - bash: |
+      backend_config_exists=0
+
+      if [[ -f ./backend.tf ]]; then
+        backend_config_exists+=1
+        echo "Found backend.tf file."
+      fi
+
+      if [[ -f ./backend.tf.json ]]; then
+        backend_config_exists+=1
+        echo "Found backend.tf.json file."
+      fi
+
+      if [[ "$backend_config_exists" -ne 1 ]]; then
+        echo "Backend configuration not found. You must include a backend.tf OR backend.tf.json file your Terraform code directory."
+        exit "$backend_config_exists"
+      fi
+
+    displayName: Verify backend file is present
+    workingDirectory: ${{ parameters.tf_run_dir }}
+    condition: |
+      and(
+        succeeded(),
+        eq('${{ parameters.remote_backend }}', true)
+      )

@@ -1,0 +1,156 @@
+parameters:
+- name: tfe_token
+  type: string
+
+- name: tfe_hostname
+  type: string
+
+- name: tf_execution_mode
+  type: string
+
+- name: tfe_workspace
+  type: string
+
+- name: tf_run_dir
+  type: string
+
+- name: pre_steps
+  type: stepList
+  default: []
+
+- name: post_steps
+  type: stepList
+  default: []
+
+- name: tf_vars
+  type: object
+  default: []
+
+- name: depends_on
+  type: object
+  default: []
+
+- name: terraform_version
+  type: string
+
+- name: venafi_user
+  type: string
+
+- name: venafi_pass
+  type: string
+
+# -----------------------------------------------------------------------------
+# Format for passing SPN data as arm_credentials:
+#   ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+#   ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+#   ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+#   ARM_TENANT_ID: $(ARM_TENANT_ID)
+# -----------------------------------------------------------------------------
+- name: arm_credentials
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# List of tfvar files to include when running Terraform.
+# Each list item should be a path relative to the root of the repository:
+#   - variables/common.tfvars
+#   - variables/nonprod.tfvars
+# -----------------------------------------------------------------------------
+- name: tfvars_files
+  type: object
+  default: []
+
+jobs:
+- job: test_and_plan
+  dependsOn: ${{ parameters.depends_on }}
+  displayName: Test and Plan
+  workspace:
+    clean: resources
+  #------------------------------------------------------------------------------------------------
+  # Conditional job-scoped variables
+  #------------------------------------------------------------------------------------------------
+  variables:
+    # If the user passes in a sub dir to use as the run dir, we need to append it to the root of the repo for use in the build agent.
+    # When setting the working directory on a remote workspace and when performing the run remotely, we must use only the sub folder specified by the user.
+    # Anywhere $(tf_run_dir) is used will be the full path. Otherwise ${{ parameters.stage.tf_run_dir }} will be used to refer to the portion of the path specified by the user.
+    - name: tf_run_dir
+      ${{ if and(parameters.tf_run_dir, ne(parameters.tf_run_dir, variables.Build.SourcesDirectory)) }}:
+        value: $(Build.SourcesDirectory)/${{ parameters.tf_run_dir }}
+      ${{ else }}:
+        value: $(Build.SourcesDirectory)
+    # and then we have to keep track of the tf_run_dir the user specified, or set it to root "/" for setting this in the workspace
+    - name: tf_ws_run_dir
+      ${{ if parameters.tf_run_dir }}:
+        value: ${{ parameters.tf_run_dir }}
+      ${{ else }}:
+        value: /
+
+  steps:
+    - ${{ if parameters.pre_steps }}:
+      - ${{ parameters.pre_steps }}
+
+    - template: steps-common.yml
+      parameters:
+        tfe_token: ${{ parameters.tfe_token }}
+        tfe_hostname: ${{ parameters.tfe_hostname }}
+        tf_run_dir: $(tf_run_dir)
+        tf_ws_run_dir: $(tf_ws_run_dir)
+        #remote_backend: $(remote_backend)
+        workspace:  ${{ parameters.tfe_workspace }}
+        tf_execution_mode: ${{ parameters.tf_execution_mode }}
+        terraform_version: ${{ parameters.terraform_version }}
+        venafi_user: ${{ parameters.venafi_user }}
+        venafi_pass: ${{ parameters.venafi_pass }}
+
+    # - bash: |
+    #     echo '${{ convertToJson(parameters.tf_var_yaml) }}' >> $(tf_run_dir)/terraform_$(Build.BuildId).auto.tfvars.json
+    #   displayName: tfvars file from yaml
+    #   condition: ne('parameters.tf_var_yaml', '')
+
+    - template: steps-tf-init.yml
+      parameters:
+        tf_run_dir: $(tf_run_dir)
+
+    - bash: |
+        unset TF_CLI_ARGS # Using the CLI args for plan/apply throws an error on "init"
+        $(Agent.TempDirectory)/terraform validate
+      workingDirectory: ${{ parameters.tf_run_dir }}
+      displayName: Terraform VALIDATE
+      condition: succeeded()
+
+    # Local runs
+    # can use plan file out/in
+    # can use env vars in build agent
+    - ${{ if eq(parameters.tf_execution_mode, 'local') }}:
+      - template: steps-terraform-plan-local.yml
+        parameters:
+          tf_execution_mode: local
+          tf_run_dir: $(tf_run_dir)
+          tfe_ws_name: ${{ parameters.tfe_workspace }}
+          tf_vars: ${{ parameters.tf_vars }}
+          arm_credentials: ${{ parameters.arm_credentials }}
+          tfvars_files: ${{ parameters.tfvars_files }}
+
+    # Remote runs
+    # can't use plan file
+    # can't use env vars in build agent, only in remote workspace
+    - ${{ if eq(parameters.tf_execution_mode, 'remote') }}:
+      - bash: |
+          # Using the CLI args for plan/apply throws an error on "init"
+          unset TF_CLI_ARGS
+          $(Agent.TempDirectory)/terraform plan -no-color | tee $(Build.ArtifactStagingDirectory)/$(System.StageName)_plan.log
+          tf_plan_result="${PIPESTATUS[0]}"
+          echo "Terraform exit code: ${tf_plan_result}"
+          if [ "$tf_plan_result" -eq 1 ]; then
+            echo "Error in Terraform operation!"
+            exit 1
+          else
+            exit 0
+          fi
+        workingDirectory: ${{ parameters.tf_run_dir }}
+        condition: and(succeeded(), eq('${{parameters.tf_execution_mode}}', 'remote'))
+        name: TerraformPlanRemote
+        displayName: Terraform PLAN (remote)
+
+    - ${{ if parameters.post_steps }}:
+      - ${{ parameters.post_steps }}

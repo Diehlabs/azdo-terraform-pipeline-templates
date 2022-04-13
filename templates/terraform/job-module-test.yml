@@ -1,0 +1,110 @@
+parameters:
+- name: tfe_token
+  type: string
+
+# -----------------------------------------------------------------------------
+# The version of Terraform to use in the pipeline stages.
+# If using a TFE remote backend with remote exection mode this will also
+#   set the remote workspace to use this version.
+# -----------------------------------------------------------------------------
+- name: terraform_version
+  type: string
+
+- name: tf_run_dir
+  type: string
+
+- name: tests_dir
+  type: string
+
+- name: module_version_number
+  type: string
+
+- name: terratest_timeout
+  type: string
+
+- name: golang_version
+  type: string
+
+- name: depends_on
+  type: object
+  default: []
+
+- name: pre_steps
+  type: stepList
+  default: []
+
+- name: vault_approle_name
+  type: string
+
+# -----------------------------------------------------------------------------
+# Format for passing SPN data as arm_credentials:
+#   ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+#   ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+#   ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+#   ARM_TENANT_ID: $(ARM_TENANT_ID)
+# -----------------------------------------------------------------------------
+- name: arm_credentials
+  type: object
+  default: []
+
+jobs:
+  - ${{ if ne(parameters.vault_approle_name, '') }}:
+      - job: get_approle_id
+        displayName: Lookup Approle ID
+        steps:
+          - template: ../vault/step-auth-approle.yml
+            parameters:
+              approle_id: $(trusted_entity_id)            # this is stored in an azdo var group, it is the "trusted entity" used by the pipeline for certain vault operations
+              approle_secret_id: $(trusted_entity_secret) # this is stored in an azdo var group, it is the "trusted entity" used by the pipeline for certain vault operations
+          - template: ../vault/step-lookup-approle-id.yml
+            parameters:
+              vault_token: $(auth_approle.VAULT_TOKEN) # this is an output variable from the step-auth-approle.yml template
+              pipeline_approle: ${{ parameters.vault_approle_name }}
+      - job: get_secret_id
+        dependsOn: get_approle_id
+        displayName: Create wrapped secret ID
+        steps:
+          - template: ../vault/steps-get-secret-id.yml
+            parameters:
+              pipeline_approle: ${{ parameters.vault_approle_name }}
+
+  - job: Terratest
+    dependsOn:
+      - ${{ if ne(parameters.vault_approle_name, '') }}:
+          - get_approle_id
+          - get_secret_id
+    workspace:
+      clean: resources
+    variables:
+      #---------------------------------------------------------------------------------------------
+      # Include prod TFE variables during publish since we won't be publishing to non-prod.
+      #---------------------------------------------------------------------------------------------
+      - group: azdo-terraform-pipeline-templates-prod
+      - ${{ if ne(parameters.vault_approle_name, '') }}:
+          - name: vault_approle_id_generated
+            value: $[ dependencies.get_approle_id.outputs['lookup_approle_id.APPROLE_ROLE_ID'] ]
+          - name: vault_wrapped_token_generated
+            value: $[ dependencies.get_secret_id.outputs['create_secid.WRAPPED_RESPONSE_TOKEN'] ]
+    steps:
+      - checkout: self
+
+      - ${{ if parameters.pre_steps }}:
+          - ${{ parameters.pre_steps }}
+
+      - template: steps-terratest.yml
+        parameters:
+          tfe_token: ${{ parameters.tfe_token }}
+          tf_run_dir: ${{ parameters.tf_run_dir }}
+          tests_dir: ${{ parameters.tests_dir }}
+          terratest_timeout: ${{ parameters.terratest_timeout }}
+          terraform_version: ${{ parameters.terraform_version }}
+          golang_version: ${{ parameters.golang_version }}
+          # THESE VALUES CONDITIONALLY OBTAINED FROM EARLIER JOB
+          vault_approle_id: $(vault_approle_id_generated)
+          vault_wrapped_token: $(vault_wrapped_token_generated)
+          arm_credentials: ${{ parameters.arm_credentials }}
+
+      # replace above publish code with:
+      - template: steps-terratest-publish.yml
+        parameters:
+          tests_dir: ${{ parameters.tests_dir }}

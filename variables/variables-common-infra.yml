@@ -1,0 +1,5 @@
+variables:
+- name: TF_LOG_PATH
+  value: $(Build.ArtifactStagingDirectory)/tf.log
+
+# These are automatically picked up by Terraform and/or providers.

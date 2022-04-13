@@ -1,0 +1,30 @@
+parameters:
+  - name: graph_file_name
+    type: string
+
+steps:
+  - task: DownloadPipelineArtifact@2
+    displayName: Download module graph
+    inputs:
+      source: current
+      artifact: ${{ parameters.graph_file_name }}
+      path: $(Agent.TempDirectory)
+    condition: succeeded()
+
+  - task: JFrog.jfrog-artifactory-vsts-extension.artifactory-generic-upload.ArtifactoryGenericUpload@2
+    displayName: "Publish module graph"
+    inputs:
+      artifactoryService: "terraform-provider-deployment"
+      fileSpec: |
+        {
+          "files": [
+            {
+              "pattern": "$(Agent.TempDirectory)/${{ parameters.graph_file_name }}",
+              "target": "local-terraform-graphs/"
+            }
+          ]
+        }
+      collectBuildInfo: true
+      buildName: $(Build.DefinitionName)
+      buildNumber: $(Build.BuildNumber)
+    condition: succeeded()

@@ -1,0 +1,23 @@
+parameters:
+  - name: tfe_token
+    type: string
+
+steps:
+  - bash: |
+      if [ "${TF_TOKEN}" = "" ]; then
+        echo "Value of TFE_TOKEN parameter: ${TF_TOKEN}"
+        echo "Please ensure you supply this secret value and re-run the pipeline."
+        exit 1
+      fi
+      cat <<-EOF  > $(TF_CLI_CONFIG_FILE)
+      credentials "$(tfe_hostname)" { token = "${TF_TOKEN}" }
+      EOF
+
+      echo "Terraform CLI config file will be located at:"
+      echo $(TF_CLI_CONFIG_FILE)
+
+      echo "File contents to confirm variable interpolation worked:"
+      cat $(TF_CLI_CONFIG_FILE)
+    displayName: Terraform CLI configuration
+    env:
+      TF_TOKEN: ${{ parameters.tfe_token }}

@@ -1,0 +1,53 @@
+parameters:
+- name: approle_id
+  type: string
+
+- name: approle_secret_id
+  type: string
+
+steps:
+- bash: |
+    printenv | sort
+  displayName: debug
+
+- bash: |
+    generate_post_data() {
+    cat <<EOF
+    {
+      "role_id": "${APPROLE_ID}",
+      "secret_id": "${APPROLE_SECRET_ID}"
+    }
+    EOF
+    }
+
+    req_url="${VAULT_ADDR}/v1/auth/approle/login"
+    echo "Authenticating approle \"${APPROLE_ID}\" at URL:"
+    echo "$req_url"
+
+    echo "Payload:"
+    echo $(generate_post_data) | jq -C .
+
+    LOGIN_RESPONSE=$(curl \
+      --retry 5 \
+      --retry-delay 0 \
+      --retry-max-time 10 \
+      --silent \
+      --request POST \
+      --data "$(generate_post_data)" \
+      "$req_url")
+
+    req_errors="$(echo "$LOGIN_RESPONSE" | jq .errors)"
+    if [ -n "$req_errors" ]; then
+      echo "Approle login response:"
+      echo "Token accessor: $(echo "$LOGIN_RESPONSE" | jq -C .auth.accessor)"
+      echo "##vso[task.setvariable variable=VAULT_TOKEN;issecret=true;isoutput=true]$(echo "$LOGIN_RESPONSE" | jq -r .auth.client_token)"
+    else
+      echo "$LOGIN_RESPONSE" | jq -C .
+      exit 1
+    fi
+
+  env:
+    APPROLE_ID: ${{ parameters.approle_id }}
+    APPROLE_SECRET_ID: ${{ parameters.approle_secret_id }}
+  displayName: Vault login with approle
+  name: auth_approle

@@ -1,0 +1,35 @@
+parameters:
+- name: graph_run_dir
+  type: string
+
+- name: graph_file_name
+  type: string
+
+- name: terraform_version
+  type: string
+
+steps:
+  - template: step-download-tf-cli.yml
+    parameters:
+      terraform_version: ${{ parameters.terraform_version }}
+
+  - bash: $(Agent.TempDirectory)/terraform init -backend=false
+    workingDirectory: ${{ parameters.graph_run_dir }}
+    displayName: Terraform INIT
+
+  - bash: |
+      # Using the CLI args for plan/apply throws an error on "init"
+      unset TF_CLI_ARGS
+      echo "Generating graph in folder: $(pwd)"
+      echo "Contents: $(ls -la)"
+      $(Agent.TempDirectory)/terraform graph | dot -Tpdf > $(Build.ArtifactStagingDirectory)/${{ parameters.graph_file_name }}
+    workingDirectory: ${{ parameters.graph_run_dir }}
+    condition: succeeded()
+    displayName: Generate module graph
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish module graph to pipeline"
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/${{ parameters.graph_file_name }}
+      artifactName: ${{ parameters.graph_file_name }}
+      artifactType: pipeline

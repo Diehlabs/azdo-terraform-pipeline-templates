@@ -1,0 +1,43 @@
+parameters:
+- name: tfe_token
+  type: string
+
+- name: tfe_hostname
+  type: string
+
+- name: module_archive_name
+  type: string
+
+steps:
+  - task: Bash@3
+    displayName: Upload new TFE registry module archive
+    condition: succeeded()
+    inputs:
+      targetType: inline
+      failOnStderr: false
+      script: |
+        MODULE_ARCHIVE_FILE="${AGENT_TEMPDIRECTORY}/${MOD_FILE_NAME}"
+
+        if [ ! -f "${MODULE_ARCHIVE_FILE}" ]; then
+            echo "Could not find module archive file for upload. Check the build stage and the download step in this stage."
+            exit 1
+        fi
+
+        echo "Module version upload URL:"
+        echo $MOD_UPLOAD_URL
+
+        MY_OUTPUT=$(curl \
+          --retry 5 \
+          --retry-delay 0 \
+          --retry-max-time 10 \
+          -H "Authorization: Bearer ${TF_TOKEN}" \
+          -H "Content-Type: application/vnd.api+json" \
+          --request PUT \
+          --data-binary @"${MODULE_ARCHIVE_FILE}" \
+          "$MOD_UPLOAD_URL")
+
+        echo "$MY_OUTPUT" | jq -C .
+
+    env:
+      TF_TOKEN: ${{ parameters.tfe_token }}
+      MOD_FILE_NAME: ${{ parameters.module_archive_name }}

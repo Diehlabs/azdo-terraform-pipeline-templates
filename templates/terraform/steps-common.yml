@@ -1,0 +1,84 @@
+parameters:
+- name: tfe_token
+  type: string
+
+- name: tf_run_dir
+  type: string
+
+- name: tf_ws_run_dir
+  type: string
+
+- name: workspace
+  type: string
+
+# remove this after removing from caller
+- name: tfvars_file_path
+  type: string
+  default: $(Build.SourcesDirectory)
+
+- name: remote_backend
+  type: boolean
+  default: true
+
+- name: tf_execution_mode
+  type: string
+
+- name: tfe_hostname
+  type: string
+
+- name: terraform_version
+  type: string
+
+# -----------------------------------------------------------------------------
+# Default here because it's far down in the template nesting ususally,
+# and it's uncommon to use this feature.
+# -----------------------------------------------------------------------------
+- name: venafi_user
+  type: string
+  default: ''
+
+# -----------------------------------------------------------------------------
+# Default here because it's far down in the template nesting ususally,
+# and it's uncommon to use this feature.
+# -----------------------------------------------------------------------------
+- name: venafi_pass
+  type: string
+  default: ''
+
+# -----------------------------------------------------------------------------
+# By default Terraform will use the TF_WORKSPACE variable to append to a prefix
+# defined in the terraform backend code block. If the user includes this variable
+# in the pipeline we assume they already have their backend code included and
+# will skip the auto-generation of the backend.tf file.
+# -----------------------------------------------------------------------------
+- name: tf_workspace
+  type: string
+  default: $(TF_WORKSPACE)
+
+steps:
+  - template: step-terraformrc.yml
+    parameters:
+      tfe_token: ${{ parameters.tfe_token }}
+
+  - template: step-backend-tf.yml
+    parameters:
+      tf_run_dir: ${{ parameters.tf_run_dir }}
+      workspace: ${{ parameters.workspace }}
+      remote_backend: ${{ parameters.remote_backend }}
+      tfe_hostname: ${{ parameters.tfe_hostname }}
+
+  - template: step-tfvars.yml
+    parameters:
+      tf_run_dir: ${{ parameters.tf_run_dir }}
+      tfe_token: ${{ parameters.tfe_token }}
+
+  - template: step-download-tf-cli.yml
+    parameters:
+      terraform_version: ${{ parameters.terraform_version }}
+
+  - ${{ if ne(parameters.venafi_user, '') }}:
+    - template: step-venafi-auth.yml
+      parameters:
+        tfvars_file_path: ${{ parameters.tf_run_dir }}
+        venafi_user: ${{ parameters.venafi_user }}
+        venafi_pass: ${{ parameters.venafi_pass }}

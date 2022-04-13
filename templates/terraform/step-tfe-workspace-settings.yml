@@ -1,0 +1,116 @@
+parameters:
+  - name: tfe_token
+    type: string
+
+  - name: tfe_workspace_name
+    type: string
+
+  - name: terraform_version
+    type: string
+
+  - name: tf_execution_mode
+    type: string
+
+  - name: tf_ws_run_dir
+    type: string
+
+  - name: tfe_hostname
+    type: string
+
+steps:
+# - bash: tree
+#   workingDirectory: $(Build.SourcesDirectory)
+#   displayName: debug pre ws setting1
+
+# - bash: tree
+#   workingDirectory: $(System.DefaultWorkingDirectory)
+#   displayName: debug pre ws setting2
+
+- task: Bash@3
+  inputs:
+    targetType: inline
+    failOnStderr: false
+    script: |
+      generate_post_data_remote() {
+      cat <<EOF
+      {
+        "data": {
+          "type": "workspaces",
+          "attributes": {
+            "name": "${TFE_WS_NAME}",
+            "execution-mode": "${TFE_EXEC_MODE}",
+            "terraform_version": "${TF_VERSION}",
+            "working-directory": "${WORKSPACE_RUN_DIR}"
+          }
+        }
+      }
+      EOF
+      }
+
+      generate_post_data_local() {
+      cat <<EOF
+      {
+        "data": {
+          "type": "workspaces",
+          "attributes": {
+            "name": "${TFE_WS_NAME}",
+            "execution-mode": "${TFE_EXEC_MODE}"
+          }
+        }
+      }
+      EOF
+      }
+
+      echo "Setting workspace options for workspace: ${TFE_WS_NAME}"
+      echo "TFE API URL: ${TF_URL}"
+      echo "Payload:"
+      echo $(generate_post_data_${TFE_EXEC_MODE}) | jq -C .
+
+      RESULT=$(curl \
+        --retry 5 \
+        --retry-delay 0 \
+        --retry-max-time 10 \
+        --silent \
+        -H "Content-Type: application/vnd.api+json" \
+        -H "Authorization: Bearer ${TF_TOKEN}" \
+        --request PATCH \
+        --data "$(generate_post_data_${TFE_EXEC_MODE})" \
+        $TF_URL)
+
+      echo "raw RESULT: ${RESULT}"
+
+      echo $RESULT | jq -C .
+
+      if [ -n "${RESULT}" ]; then
+        ERROR=$(echo $RESULT | jq .errors)
+        WS_ID=$(echo $RESULT | jq .data.id)
+        if [ "${ERROR}" != null ]; then
+          echo $ERROR | jq
+          exit 1
+        elif [ "${WS_ID}" == null ]; then
+          "Possible non-existant workspace!"
+          echo $RESULT | jq -C .data
+          exit 1
+        else
+          echo $RESULT | jq -C .data
+          echo "Workspace updated!"
+        fi
+      else
+        exit 5
+      fi
+
+  displayName: Set workspace options in TFE
+  env:
+    TF_VERSION: ${{ parameters.terraform_version }}
+    TFE_EXEC_MODE: ${{ parameters.tf_execution_mode }}
+    TFE_WS_NAME: ${{ parameters.tfe_workspace_name }}
+    TF_TOKEN: ${{ parameters.tfe_token }}
+    TF_URL: https://${{ parameters.tfe_hostname }}/api/v2/organizations/$(tfe_org_name)/workspaces/${{ parameters.tfe_workspace_name }}
+    # if the working dir is the same as the repo root, set the dir as /
+    ${{ if eq(parameters.tf_ws_run_dir, variables.Build.SourcesDirectory) }}:
+      WORKSPACE_RUN_DIR: '/'
+    # if the working dir is a subfolder of the repo, strip out the build agent specific portion of the path
+    ${{ else }}:
+      # WORKSPACE_RUN_DIR: ${{ replace(parameters.tf_ws_run_dir, variables.Build.SourcesDirectory, 'boo') }}
+      WORKSPACE_RUN_DIR: ${{parameters.tf_ws_run_dir}}
+  condition: succeeded()

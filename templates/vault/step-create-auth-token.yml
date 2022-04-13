@@ -1,0 +1,54 @@
+# This template will generate a Vault auth token good for X seconds (see "ttl" in post data below).
+# This token will only have the "default" policy assigned.
+# This token can be used for unwrap operations.
+# The token will be output as $(vault_create_token.VAULT_AUTH_TOKEN)
+parameters:
+- name: vault_token
+  type: string
+
+- name: vault_ttl
+  type: string
+  default: 60s
+
+steps:
+- bash: |
+    generate_post_data() {
+    cat <<EOF
+    {
+      "token_policies": ["default"],
+      "ttl":"${VAULT_TTL}"
+    }
+    EOF
+    }
+
+    req_url="${VAULT_ADDR}/v1/auth/token/create"
+    echo "Creating Vault auth token at URL:"
+    echo $req_url
+
+    echo "Payload:"
+    echo "$(generate_post_data)"
+
+    CREATE_RESPONSE=$(curl \
+      --retry 5 \
+      --retry-delay 0 \
+      --retry-max-time 10 \
+      --silent \
+      --header "X-Vault-Token: ${VAULT_TOKEN}" \
+      --request POST \
+      --data "$(generate_post_data)" \
+      $req_url)
+
+    req_errors="$(echo $CREATE_RESPONSE | jq -C .errors)"
+    if [ -n "${req_errors}" ]; then
+      echo "Auth token accessor: $(echo $CREATE_RESPONSE | jq -C .auth.accessor)"
+      echo "##vso[task.setvariable variable=VAULT_AUTH_TOKEN;issecret=true;isoutput=true]$(echo $CREATE_RESPONSE | jq -r .auth.client_token)"
+    else
+      echo $CREATE_RESPONSE | jq -C .
+      exit 1
+    fi
+
+  env:
+    VAULT_TOKEN: ${{ parameters.vault_token }}
+    VAULT_TTL: ${{ parameters.vault_ttl }}
+  displayName: Vault create auth token
+  name: vault_create_token

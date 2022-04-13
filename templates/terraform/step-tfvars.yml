@@ -1,0 +1,31 @@
+parameters:
+  - name: tfe_token
+    type: string
+
+  - name: tf_run_dir
+    type: string
+    default: $(tf_run_dir)
+
+  - name: token_prefix
+    type: string
+    default: "$("
+
+  - name: token_suffix
+    type: string
+    default: ")"
+
+steps:
+  - task: replacetokens@3
+    displayName: TFvars template population
+    inputs:
+      rootDirectory: ${{ parameters.tf_run_dir }}
+      targetFiles: |
+        **/*.auto.tfvars.template => *.auto.tfvars
+        **/*.auto.tfvars.json.template => *.auto.tfvars.json
+      escapeType: auto
+      encoding: "auto"
+      writeBOM: true
+      actionOnMissing: "warn"
+      keepToken: true
+      tokenPrefix: ${{ parameters.token_prefix }}
+      tokenSuffix: ${{ parameters.token_suffix }}

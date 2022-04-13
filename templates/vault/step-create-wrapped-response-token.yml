@@ -1,0 +1,51 @@
+parameters:
+- name: vault_token
+  type: string
+
+- name: vault_role_name
+  type: string
+  default: svcazdoprod
+
+- name: vault_ttl
+  type: string
+  default: "10m"
+
+steps:
+  - checkout: self
+    clean: 'true'
+    persistCredentials: 'true'
+  - bash: |
+      if [ ! -n $VAULT_TOKEN ]; then
+        echo "No Vault token was passed in? Value received:"
+        echo $VAULT_TOKEN
+      fi
+
+      req_url="${VAULT_ADDR}/v1/terraform/creds/${VAULT_ROLE_NAME}"
+      echo "Creating dynamic TFE token for Vault role ${VAULT_ROLE} at URL:"
+      echo $req_url
+      echo "Vault token TTL: ${VAULT_TTL}"
+
+      WRAP_RESPONSE=$(curl \
+        --retry 5 \
+        --retry-delay 0 \
+        --retry-max-time 10 \
+        --silent \
+        --header "X-Vault-Token: ${VAULT_TOKEN}" \
+        --header "X-Vault-Wrap-TTL: ${VAULT_TTL}" \
+        --request POST \
+      $req_url)
+
+      req_errors="$(echo $WRAP_RESPONSE | jq -C .errors)"
+      if [ -n "${req_errors}" ]; then
+        echo "Token accessor: $(echo $WRAP_RESPONSE | jq -C .wrap_info.accessor)"
+        echo "##vso[task.setvariable variable=WRAPPED_RESPONSE_TOKEN;isoutput=true]$(echo $WRAP_RESPONSE | jq -r .wrap_info.token)"
+      else
+        echo $WRAP_RESPONSE | jq -C .
+        exit 1
+      fi
+
+    env:
+      VAULT_TOKEN: ${{ parameters.vault_token }}
+      VAULT_ROLE_NAME: ${{ parameters.vault_role_name }}
+    displayName: Vault create dynamic TFE token
+    name: tfe_get_token

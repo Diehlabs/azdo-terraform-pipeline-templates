@@ -1,0 +1,240 @@
+parameters:
+# -----------------------------------------------------------------------------
+# A Terraform API token used to access to the private Terraform module
+# registry during Terratest.
+# -----------------------------------------------------------------------------
+- name: tfe_token
+  type: string
+
+# -----------------------------------------------------------------------------
+# The version of Terraform to use in the pipeline stages.
+# If using a TFE remote backend with remote exection mode this will also
+#   set the remote workspace to use this version.
+# -----------------------------------------------------------------------------
+- name: terraform_version
+  type: string
+
+# -----------------------------------------------------------------------------
+# Directory to use when performing a plan/apply. In a module pipeline this is
+# used by Terratest.
+# -----------------------------------------------------------------------------
+- name: tf_run_dir
+  type: string
+  default: "examples/build"
+
+# -----------------------------------------------------------------------------
+# The root directory of the module. Nornmally this shoud be left alone and
+# will be the root directory of the module repository.
+# -----------------------------------------------------------------------------
+- name: module_root_dir
+  type: string
+  default: $(System.DefaultWorkingDirectory)
+# -----------------------------------------------------------------------------
+# Folder in the module repository that contains the Terratest code to be used
+# in the pipeline.
+# -----------------------------------------------------------------------------
+- name: tests_dir
+  type: string
+  default: "test"
+
+# -----------------------------------------------------------------------------
+# Timeout for Terratest. Must be enough to allow the entire test to run. ex: 10m
+# -----------------------------------------------------------------------------
+- name: terratest_timeout
+  type: string
+  default: "30m"
+
+# -----------------------------------------------------------------------------
+# The golang version to be used with Terratest. Must be 1.16.0 or higher.
+# -----------------------------------------------------------------------------
+- name: golang_version
+  type: string
+  default: "1.16.5"
+
+# -----------------------------------------------------------------------------
+# Allows the pipeline to build and publish modules in non-main branches if
+# test stage completes successfully.
+# -----------------------------------------------------------------------------
+- name: build_any_branch
+  type: string
+  default: "no"
+
+# -----------------------------------------------------------------------------
+# The name of the provider required by the module, i.e. "azurerm"
+# -----------------------------------------------------------------------------
+- name: module_provider
+  type: string
+
+# -----------------------------------------------------------------------------
+# The name of the team that owns and supports the module. i.e. "myteam".
+# Please don't put "core-myteam-etc" as this just makes the name of the module
+# longer than necessary.
+# -----------------------------------------------------------------------------
+- name: module_team_name
+  type: string
+
+# -----------------------------------------------------------------------------
+# The name of the module. i.e. "aks"
+# -----------------------------------------------------------------------------
+- name: module_name
+  type: string
+
+# -----------------------------------------------------------------------------
+# The version number of the module. Must be different each time the module
+# is published.
+# -----------------------------------------------------------------------------
+- name: module_version_number
+  type: string
+
+# -----------------------------------------------------------------------------
+# Optional pipeline steps to inject before test stage steps are run.
+# -----------------------------------------------------------------------------
+- name: test_pre_steps
+  type: stepList
+  default: []
+
+# -----------------------------------------------------------------------------
+# Optional stage name prefix. Only really useful if you're building multiple
+# modules in the same repo which is not typical or recommnded.
+# -----------------------------------------------------------------------------
+- name: stage_name_prefix
+  type: string
+  default: ""
+
+# -----------------------------------------------------------------------------
+# Used to make sure templated steps depend on user supplied stages.
+# -----------------------------------------------------------------------------
+- name: stage_depends_on
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# Optional Vault approle name to be used to retrieve secrets from Vault inside
+# Terratest.
+# -----------------------------------------------------------------------------
+- name: vault_approle_name
+  type: string
+  default: ""
+
+# -----------------------------------------------------------------------------
+# The source directory for the module code.
+# -----------------------------------------------------------------------------
+- name: source_directory
+  type: string
+  default: $(Build.SourcesDirectory)
+
+# -----------------------------------------------------------------------------
+# Format for passing SPN data as arm_credentials:
+#   ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+#   ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+#   ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+#   ARM_TENANT_ID: $(ARM_TENANT_ID)
+# -----------------------------------------------------------------------------
+- name: arm_credentials
+  type: object
+  default: []
+
+stages:
+  #---------------------------------------------------------------------------------------------
+  # Stage to perform unit and/or integration tests on the module.
+  #---------------------------------------------------------------------------------------------
+  - stage: ${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_test
+    displayName: "TF Module Tests - ${{ parameters.module_name }}"
+    dependsOn: ${{ parameters.stage_depends_on }}
+    variables:
+      - template: variables/variables-common-all.yml
+        parameters:
+          tf_run_dir: ${{ parameters.source_directory }}/${{ parameters.tf_run_dir }}
+      - template: variables/variables-common-module.yml
+      - group: azdo-terraform-pipeline-templates-prod
+
+    jobs:
+      #---------------------------------------------------------------------------------------------
+      # Run Checkov static IaC code analysis.
+      #---------------------------------------------------------------------------------------------
+      - template: templates/terraform/job-checkov.yml
+        parameters:
+          tfe_token: ${{ parameters.tfe_token }}
+          tf_run_dir: ${{ parameters.tf_run_dir }}
+
+      #---------------------------------------------------------------------------------------------
+      # Run linters etc.
+      #---------------------------------------------------------------------------------------------
+      - template: templates/terraform/job-module-test.yml
+        parameters:
+          depends_on: [checkov_analysis]
+          tfe_token: ${{ parameters.tfe_token }}
+          tf_run_dir: ${{ parameters.source_directory }}/${{ parameters.tf_run_dir }}
+          tests_dir: ${{ parameters.source_directory }}/${{ parameters.tests_dir }}
+          module_version_number: ${{ parameters.module_version_number }}
+          terratest_timeout: ${{ parameters.terratest_timeout }}
+          golang_version: ${{ parameters.golang_version }}
+          vault_approle_name: ${{ parameters.vault_approle_name }}
+          arm_credentials: ${{ parameters.arm_credentials }}
+          terraform_version: ${{ parameters.terraform_version }}
+          ${{ if parameters.test_pre_steps }}:
+            pre_steps: ${{ parameters.test_pre_steps }}
+
+  #---------------------------------------------------------------------------------------------
+  # Stage to build the module archive and resource graph.
+  #---------------------------------------------------------------------------------------------
+  - stage: ${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_build
+    displayName: "TF Module Build - ${{ parameters.module_name }}"
+    dependsOn: ${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_test
+    condition: |
+      and(
+        eq(dependencies.${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_test.result, 'Succeeded'),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        or(
+          eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+          eq(variables['Build.SourceBranch'], 'refs/heads/master'),
+          eq('${{ parameters.build_any_branch }}', 'yes')
+          )
+        )
+    variables:
+      - template: variables/variables-common-all.yml
+      - template: variables/variables-common-module.yml
+
+    jobs:
+      - template: templates/terraform/job-module-build.yml
+        parameters:
+          terraform_version: ${{ parameters.terraform_version }}
+          tfe_token: ${{ parameters.tfe_token }}
+          tf_run_dir: ${{ parameters.source_directory }}/${{ parameters.tf_run_dir }}
+          module_root_dir: ${{ parameters.module_root_dir }}
+          module_archive_name: terraform-${{ parameters.module_provider }}-${{ parameters.module_team_name }}-${{ parameters.module_name }}-${{ parameters.module_version_number }}.tar.gz
+          module_full_name: terraform-${{ parameters.module_provider }}-${{ parameters.module_team_name }}-${{ parameters.module_name }}
+          ${{ if parameters.test_pre_steps }}:
+            pre_steps: ${{ parameters.test_pre_steps }}
+
+  #---------------------------------------------------------------------------------------------
+  # Stage to publish the module archive and resource graph.
+  # A dynamic TFE API token for the "owners" team is generated by Vault
+  #  for the production TFE host to be used when publishing the module.
+  #---------------------------------------------------------------------------------------------
+  - stage: ${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_publish
+    displayName: "TF Module Publish - ${{ parameters.module_name }}"
+    dependsOn: ${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_build
+    condition: eq(dependencies.${{ replace( coalesce(parameters.stage_name_prefix, parameters.module_name), '-', '_' ) }}_build.result, 'Succeeded')
+
+    variables:
+      - template: variables/variables-common-all.yml
+      - template: variables/variables-common-module.yml
+      - group: azdo-terraform-pipeline-templates-prod
+
+    jobs:
+      - template: templates/vault/job-get-tfe-token.yml
+        parameters:
+          VAULT_APPROLE_ID: $(trusted_entity_id)
+          VAULT_APPROLE_SECRET: $(trusted_entity_secret)
+          VAULT_BACKEND_ROLE_NAME: $(vault_role_name_tfe_owners)
+
+      - template: templates/terraform/job-module-publish.yml
+        parameters:
+          tfe_token: $[ dependencies.get_tfe_token.outputs['tfe_get_token.TFE_TOKEN'] ]
+          tfe_hostname: $(tfe_hostname)
+          depends_on: get_tfe_token
+          module_version_number: ${{ parameters.module_version_number }}
+          module_provider: ${{ parameters.module_provider }}
+          module_archive_name: terraform-${{ parameters.module_provider }}-${{ parameters.module_team_name }}-${{ parameters.module_name }}-${{ parameters.module_version_number }}.tar.gz
+          module_full_name: terraform-${{ parameters.module_provider }}-${{ parameters.module_team_name }}-${{ parameters.module_name }}

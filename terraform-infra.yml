@@ -1,0 +1,245 @@
+# -----------------------------------------------------------------------------
+# Generates all stages (plan, apply) for Terraform configuration runs.
+# -----------------------------------------------------------------------------
+
+parameters:
+# -----------------------------------------------------------------------------
+# A Terraform API token with permissions to the workspace being used.
+# Also allows access to the private Terraform module registry.
+# -----------------------------------------------------------------------------
+- name: tfe_token
+  type: string
+  default: $(tfe_team_token)
+
+# -----------------------------------------------------------------------------
+# The version of Terraform to use in the pipeline stages.
+# If using a TFE remote backend with remote exection mode this will also
+#   set the remote workspace to use this version.
+# -----------------------------------------------------------------------------
+- name: terraform_version
+  type: string
+
+# -----------------------------------------------------------------------------
+# The execution mode, local or remote.
+# The default is remote but local is recommended going forward.
+# This only applies when using TFE.
+# -----------------------------------------------------------------------------
+- name: tf_execution_mode
+  type: string
+  default: "local"
+
+# -----------------------------------------------------------------------------
+# The workspace name. Will be appended to the value of "prefix"
+#   defined in backend.tf.
+# -----------------------------------------------------------------------------
+- name: workspace
+  type: string
+
+# -----------------------------------------------------------------------------
+# The directory to run Terraform in.
+# Default is root directory of the repository.
+# -----------------------------------------------------------------------------
+- name: tf_run_dir
+  type: string
+  default: ''
+
+# -----------------------------------------------------------------------------
+# Optional dependency for first stage.
+# -----------------------------------------------------------------------------
+- name: depends_on
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# The Azure DevOps approval environment to use for the deploy (apply).
+# -----------------------------------------------------------------------------
+- name: azdo_approval_environment
+  type: string
+
+# -----------------------------------------------------------------------------
+# Optional pre-steps.
+# -----------------------------------------------------------------------------
+- name: pre_steps
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# Optional posy-apply steps.
+# -----------------------------------------------------------------------------
+- name: post_apply_steps
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# The environment determines which TFE host to use for remote runs and state
+# storage.
+# -----------------------------------------------------------------------------
+- name: tfe_environment
+  type: string
+  default: prod
+
+# -----------------------------------------------------------------------------
+# Timeout for the pipeline run. For long running resources, set the timeout
+# time in minutes as required.
+# -----------------------------------------------------------------------------
+- name: apply_timeout
+  type: string
+  default: "60"
+
+# -----------------------------------------------------------------------------
+# Format for passing SPN data as arm_credentials:
+#   ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+#   ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+#   ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+#   ARM_TENANT_ID: $(ARM_TENANT_ID)
+# -----------------------------------------------------------------------------
+- name: arm_credentials
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# List of tfvar files to include when running Terraform.
+# Each list item should be a path relative to the root of the repository:
+#   - variables/common.tfvars
+#   - variables/nonprod.tfvars
+# -----------------------------------------------------------------------------
+- name: tfvars_files
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# Optional and potentially dangerous.
+# Allows "apply" stage to run without approvals as long as the workspace name
+#   does not contain "prod".
+# -----------------------------------------------------------------------------
+- name: apply_any_branch
+  type: string
+  default: no
+
+# -----------------------------------------------------------------------------
+# Required only if needing to use the Venafi provider in Terraform.
+# Must include venafi_user AND venafi_pass to function.
+# -----------------------------------------------------------------------------
+- name: venafi_user
+  type: string
+  default: ''
+
+# -----------------------------------------------------------------------------
+# Required only if needing to use the Venafi provider in Terraform.
+# Must include venafi_user AND venafi_pass to function.
+# -----------------------------------------------------------------------------
+- name: venafi_pass
+  type: string
+  default: ''
+
+stages:
+  ############################
+  #       PLAN STAGE(S)      #
+  ############################
+#- stage: plan_${{ replace(coalesce(parameters.tf_run_dir, variables['Build.Repository.Name']), '-', '_') }}_${{ replace(parameters.workspace, '-', '_') }}
+- stage: plan_${{ replace(parameters.workspace, '-', '_') }}
+  ${{ if parameters.depends_on }}:
+    dependsOn: ${{ parameters.depends_on }}
+  ${{ else }}:
+    dependsOn: []
+
+  variables:
+  - template: variables/variables-common-all.yml
+  - template: variables/variables-common-infra.yml
+  - group: "azdo-terraform-pipeline-templates-${{ parameters.tfe_environment }}"
+  - name: TF_WORKSPACE
+    value: ${{ parameters.workspace }}
+
+  jobs:
+    - template: templates/terraform/job-checkov.yml
+      parameters:
+        tfe_token: ${{ parameters.tfe_token }}
+        tf_run_dir: ${{ parameters.tf_run_dir }}
+
+    - job: tf_infra_prep
+      displayName: Configure TFE workspace backend
+      dependsOn: [ checkov_analysis ]
+      steps:
+        - template: templates/terraform/step-tfe-workspace-settings.yml
+          parameters:
+            tfe_workspace_name: $(Build.Repository.Name)-${{ parameters.workspace }}
+            tfe_token: ${{ parameters.tfe_token }}
+            tf_ws_run_dir: ${{ coalesce(parameters.tf_run_dir, '/') }}
+            tf_execution_mode: ${{ parameters.tf_execution_mode }}
+            tfe_hostname: $(tfe_hostname)
+            terraform_version: ${{ parameters.terraform_version }}
+
+    - template: templates/terraform/job-terraform-plan.yml
+      parameters:
+        depends_on: [ tf_infra_prep ]
+        venafi_user: ${{ parameters.venafi_user }}
+        venafi_pass: ${{ parameters.venafi_pass }}
+        terraform_version: ${{ parameters.terraform_version }}
+        tfe_token: ${{ parameters.tfe_token }}
+        tf_execution_mode: ${{ parameters.tf_execution_mode }}
+        tfe_workspace: ${{ parameters.workspace }}
+        tfe_hostname: $(tfe_hostname)
+        tf_run_dir: ${{ parameters.tf_run_dir }}
+        tfvars_files: ${{ parameters.tfvars_files }}
+        ${{ if parameters.pre_steps }}:
+          pre_steps: ${{ parameters.pre_steps }}
+        # These have to be parsed out at the stage level and passed down to other templates.
+        # You can't iterate on them at job or step level it seems.
+        tf_vars:
+          ${{ each tfvar in variables }}:
+            ${{ if startsWith(tfvar.key, 'TFVAR_') }}:
+              ${{ replace(tfvar.key, 'TFVAR', 'TF_VAR') }}: ${{ tfvar.value }}
+        arm_credentials: ${{ parameters.arm_credentials }}
+
+  ############################
+  #       APPLY STAGE(S)     #
+  ############################
+
+  # Can we cancel this stage if no changes occur? variable: TF_PLAN_RESULT
+  # https://docs.microsoft.com/en-us/azure/devops/pipelines/process/conditions?view=azure-devops&tabs=yaml#ive-got-a-conditional-step-that-runs-even-when-a-job-is-canceled-how-do-i-manage-to-cancel-all-jobs-at-once
+
+# - stage: apply_${{ replace(parameters.workspace, '-', '_') }}_${{ replace(coalesce(parameters.tf_run_dir, variables['Build.Repository.Name']), '-', '_') }}
+#   dependsOn: plan_${{ replace(parameters.workspace, '-', '_') }}_${{ replace(coalesce(parameters.tf_run_dir, variables['Build.Repository.Name']), '-', '_') }}
+- stage: apply_${{ replace(parameters.workspace, '-', '_') }}
+#- dependsOn: plan_${{ replace(coalesce(parameters.tf_run_dir, variables['Build.Repository.Name']), '-', '_') }}_${{ replace(parameters.workspace, '-', '_') }}
+  # the condition below dynamically looks for a successful plan_<env> stage
+  # before running an apply_<env> stage. This is to prevent bad plans
+  # from being applied.
+  condition: |
+    and(
+      eq(dependencies.plan_${{ replace(parameters.workspace, '-', '_') }}.result,'Succeeded'),
+      ne(variables['Build.Reason'], 'PullRequest'),
+      or(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        eq(variables['Build.SourceBranch'], 'refs/heads/master'),
+        and(
+          eq('${{ parameters.apply_any_branch }}', 'yes'),
+          not(contains('${{ parameters.workspace }}', 'prod'))
+        )
+      )
+    )
+
+  variables:
+    - template: variables/variables-common-all.yml
+    - template: variables/variables-common-infra.yml
+    - group: azdo-terraform-pipeline-templates-${{ parameters.tfe_environment }}
+    - name: TF_WORKSPACE
+      value: ${{ parameters.workspace }}
+    - name: TF_PLAN_RESULT
+      value: $[ stageDependencies.plan_${{ replace(parameters.workspace, '-', '_') }}.test_and_plan.outputs['terraform_plan_local.TF_PLAN_RESULT'] ]
+
+  jobs:
+    - template: templates/terraform/job-terraform-apply.yml
+      parameters:
+        apply_timeout: ${{ parameters.apply_timeout}}
+        tfe_token: ${{ parameters.tfe_token }}
+        terraform_version: ${{ parameters.terraform_version }}
+        tf_execution_mode: ${{ parameters.tf_execution_mode }}
+        tfe_workspace: ${{ parameters.workspace }}
+        tfe_hostname: $(tfe_hostname)
+        tf_run_dir: ${{ parameters.tf_run_dir }}
+        azdo_approval_environment: ${{ parameters.azdo_approval_environment }}
+        venafi_user: ${{ parameters.venafi_user }}
+        venafi_pass: ${{ parameters.venafi_pass }}
+        ${{ if parameters.post_apply_steps }}:
+          post_steps: ${{ parameters.post_apply_steps }}

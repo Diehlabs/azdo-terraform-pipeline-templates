@@ -1,0 +1,120 @@
+parameters:
+- name: tf_run_dir
+  type: string
+
+- name: tf_vars
+  type: object
+  default: []
+
+- name: tfe_ws_name
+  type: string
+
+- name: tf_execution_mode
+  type: string
+
+# -----------------------------------------------------------------------------
+# Format for passing SPN data as arm_credentials:
+#   ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+#   ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+#   ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+#   ARM_TENANT_ID: $(ARM_TENANT_ID)
+# -----------------------------------------------------------------------------
+- name: arm_credentials
+  type: object
+  default: []
+
+# List of tfvar files to include when running Terraform.
+# Each list item should be a path relative to the root of the repository:
+#   - variables/common.tfvars
+#   - variables/nonprod.tfvars
+# -----------------------------------------------------------------------------
+- name: tfvars_files
+  type: object
+  default: []
+
+# -----------------------------------------------------------------------------
+# Command and option flag "terraform -detailed-exitcode"
+# Return detailed exit codes when the command exits. This
+#         will change the meaning of exit codes to:
+#         0 - Succeeded, diff is empty (no changes)
+#         1 - Errored
+#         2 - Succeeded, there is a dif
+# -----------------------------------------------------------------------------
+steps:
+- bash: |
+    TF_CMD="$(Agent.TempDirectory)/terraform plan -out=$(Build.ArtifactStagingDirectory)/terraform.plan -detailed-exitcode -no-color "
+
+    if [[ ! -z "$tfvars_files" ]]; then
+      for i in ${tfvars_files//;/ }
+      do
+        TF_CMD+="-var-file=$(Build.SourcesDirectory)/${i} "
+      done
+    fi
+
+    TF_CMD+="| tee $(Build.ArtifactStagingDirectory)/$(System.StageName)_plan.log"
+
+    echo "Executing Terraform with the following command line:"
+    echo "$TF_CMD"
+
+    eval "$TF_CMD; typeset -a tf_cmd_result=(\${PIPESTATUS[@]})"
+    tf_plan_result="${tf_cmd_result[0]}"
+    echo "##vso[task.setvariable variable=TF_PLAN_RESULT;isOutput=true]$tf_plan_result"
+
+    echo "Terraform plan used workspace name: ${{ parameters.tfe_ws_name }}"
+    echo "Terraform plan result:"
+    case "$tf_plan_result" in
+      0)
+        echo "Succeeded, diff is empty (no changes)"
+        exit 0
+        ;;
+      1)
+        echo "Errored"
+        exit 1
+        ;;
+      2)
+        echo "Succeeded, there is a diff"
+        exit 0
+        ;;
+      *)
+        echo "Unable to get Terraform exit code"
+        exit 127
+        ;;
+    esac
+
+  workingDirectory: ${{ parameters.tf_run_dir }}
+  # Since AZDO uppercases all pipeline var names when setting them in env, we need to re-add with the correct/original casing.
+  # These vars also appear to not be availble (the originals show up, but the replacement and addition of new vars does not happen) in a "2nd level" template, so we have to pass them as params.
+  env:
+    tfvars_files: ${{ join(';', parameters.tfvars_files) }}
+    ${{each parameter in parameters.tf_vars}}:
+      ${{replace(parameter.key, 'TFVAR', 'TF_VAR')}}: ${{parameter.value}}
+    ${{ if ne(parameters.arm_credentials, '') }}:
+      ARM_CLIENT_ID: ${{ parameters.arm_credentials.CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ parameters.arm_credentials.CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ parameters.arm_credentials.TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ parameters.arm_credentials.SUBSCRIPTION_ID }}
+  condition: |
+    and(
+      succeeded(),
+      eq('${{parameters.tf_execution_mode}}', 'local')
+    )
+  name: terraform_plan_local
+  displayName: Terraform PLAN (local)
+
+- task: PublishPipelineArtifact@1
+  displayName: Publish plan to pipeline
+  inputs:
+    targetPath: $(Build.ArtifactStagingDirectory)/terraform.plan
+    artifactName: tfplan-$(Build.BuildId)-$(System.StageAttempt)-${{ parameters.tfe_ws_name }}
+    artifactType: pipeline
+  condition: |
+    and(
+      succeeded(),
+      eq('${{parameters.tf_execution_mode}}', 'local')
+    )
+# unable to get the TF_PLAN_RESULT in the local apply step, leaving out for now
+    # and(
+    #   succeeded(),
+    #   eq(variables['terraform_plan_local.TF_PLAN_RESULT'], '2'),
+    #   eq('${{parameters.tf_execution_mode}}', 'local')
+    # )

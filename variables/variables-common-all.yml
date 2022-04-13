@@ -1,0 +1,15 @@
+variables:
+#----------------------------------------------------------
+# Externally managed variables from AZDO variable groups.
+#----------------------------------------------------------
+- group: approle-azdo
+- group: azdo-terraform-pipeline-templates
+
+# TODO: Move to AZDO variable group
+- name: tfe_org_name
+  value: Diehlabs
+#-------------------------------------------------------------------------------------------------------------------------
+# These variables provide defaults but also allow the user to override the value with a variable in their own pipeline.
+#-------------------------------------------------------------------------------------------------------------------------
+- name: tfe_execution_mode
+  value: $[ coalesce(variables.tf_execution_mode, 'remote') ]

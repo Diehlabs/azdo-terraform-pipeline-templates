@@ -1,0 +1,65 @@
+parameters:
+- name: tf_run_dir
+  type: string
+
+- name: tfe_ws_name
+  type: string
+
+# commented out because it's not used - why is it here?
+# - name: tf_run_result
+#   type: string
+#   default: "10"
+
+- name: tf_execution_mode
+  type: string
+
+steps:
+  - task: DownloadPipelineArtifact@2
+    inputs:
+      source: current
+      artifact:  tfplan-$(Build.BuildId)-$(System.StageAttempt)-${{ parameters.tfe_ws_name }}
+      path: $(Agent.TempDirectory)
+    displayName: Terraform Plan Download
+    # checking for condition:
+    # eq(stageDependencies.plan_${{ replace(parameters.tfe_ws_name, '-', '_') }}.test_and_plan.outputs['terraform_plan_local.TF_PLAN_RESULT', 2),
+    # does not evaulate properly :(
+    # remove or(eq(variables.tfe_execution_mode, 'local')...... after stage-* templates are removed
+    condition: |
+      and(
+        succeeded(),
+        eq('${{parameters.tf_execution_mode}}', 'local')
+      )
+    # and(
+    #   succeeded(),
+    #   eq(variables.TF_PLAN_RESULT, '2'),
+    #   or(
+    #     eq(variables.tfe_execution_mode, 'local'),
+    #     eq('${{parameters.tf_execution_mode}}', 'local')
+    #   )
+    # )
+
+  - bash: |
+      $(Agent.TempDirectory)/terraform apply $(Agent.TempDirectory)/terraform.plan -no-color | tee $TF_LOG_PATH
+      if [ $? -eq 1 ]; then
+        echo "##vso[task.setvariable variable=${?}]$tf_apply_result"
+        exit 1
+      else
+        echo "##vso[task.setvariable variable=${?}]$tf_apply_result"
+        exit 0
+      fi
+    workingDirectory: ${{ parameters.tf_run_dir }}
+    displayName: Terraform APPLY (local)
+# remove or(eq(variables.tfe_execution_mode, 'local')...... after stage-* templates are removed
+    condition: |
+      and(
+        succeeded(),
+        eq('${{parameters.tf_execution_mode}}', 'local')
+      )
+    # and(
+    #   succeeded(),
+    #   eq(variables.TF_PLAN_RESULT, '2'),
+    #   or(
+    #     eq(variables.tfe_execution_mode, 'local'),
+    #     eq('${{parameters.tf_execution_mode}}', 'local')
+    #   )
+    # )

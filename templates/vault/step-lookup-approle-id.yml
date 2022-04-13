@@ -1,0 +1,36 @@
+parameters:
+  - name: vault_token
+    type: string
+
+  - name: pipeline_approle
+    type: string
+
+steps:
+  - bash: |
+      # Get the Approle ID by name - to be used by the pipeline
+
+      req_url="${VAULT_ADDR}/v1/auth/approle/role/${{ parameters.pipeline_approle }}/role-id"
+      echo "Looking up ID for approle \"${{ parameters.pipeline_approle }}\" at URL:"
+      echo $req_url
+
+      ROLE_ID_RESPONSE=$(curl \
+        --retry 5 \
+        --retry-delay 0 \
+        --retry-max-time 10 \
+        --header "X-Vault-Token: ${VAULT_TOKEN}" \
+        --request GET \
+        $req_url)
+
+      req_errors="$(echo $ROLE_ID_RESPONSE | jq -C .errors)"
+      if [ ! -n "${req_errors}" ]; then
+        echo $ROLE_ID_RESPONSE | jq -C .
+        exit 1
+      else
+        ROLE_ID=$(echo $ROLE_ID_RESPONSE | jq -r .data.role_id)
+        echo "Pipeline Approle ID: ${ROLE_ID}"
+        echo "##vso[task.setvariable variable=APPROLE_ROLE_ID;isOutput=true]${ROLE_ID}"
+      fi
+    name: lookup_approle_id
+    displayName: Lookup Vault Approle ID
+    env:
+      VAULT_TOKEN: ${{ parameters.vault_token }}

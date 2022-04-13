@@ -1,0 +1,73 @@
+parameters:
+  - name: tfe_token
+    type: string
+
+  - name: version_number
+    type: string
+
+  - name: module_provider
+    type: string
+
+  - name: module_full_name
+    type: string
+
+  - name: tfe_hostname
+    type: string
+
+steps:
+  - task: Bash@3
+    inputs:
+      targetType: inline
+      failOnStderr: false
+      script: |
+        generate_post_data() {
+        cat <<EOF
+        {
+          "data": {
+            "type": "registry-module-versions",
+            "attributes": {
+              "version": "${MODULE_VERSION_NUMBER}"
+            }
+          }
+        }
+        EOF
+        }
+
+        echo "Creating new module version at: ${REQ_URL}"
+        echo "Creating new module version with the following data: "
+        echo $(generate_post_data) | jq -C .
+        CREATE_RESPONSE=$(curl \
+          --retry 5 \
+          --retry-delay 0 \
+          --retry-max-time 10 \
+          --silent \
+          -H "Authorization: Bearer ${TF_TOKEN}" \
+          -H "Content-Type: application/vnd.api+json" \
+          -w '|%{http_code}' \
+          --request POST \
+          --data "$(generate_post_data)" \
+          $REQ_URL)
+        IFS='|' read  -r -a array <<< "$CREATE_RESPONSE"
+        CREATE_RESPONSE_BODY=${array[0]}
+        CREATE_RESPONSE_CODE=${array[1]}
+        echo "HTTP response from create new module version request: HTTP ${CREATE_RESPONSE_CODE}"
+        echo "BODY:"
+        echo $CREATE_RESPONSE_BODY | jq -C .
+        if [ "${CREATE_RESPONSE_CODE}" != "201" ]; then
+          echo "Unable to create new module version, recieved: HTTP ${CREATE_RESPONSE_CODE}"
+          echo $CREATE_RESPONSE_BODY | jq .
+          exit 1
+        else
+          echo "Successfully created new module version"
+          MOD_UPLOAD_URL=$(echo ${CREATE_RESPONSE_BODY} | jq -r .data.links.upload)
+          echo "Upload URL: ${MOD_UPLOAD_URL}"
+          echo "##vso[task.setvariable variable=MOD_UPLOAD_URL]${MOD_UPLOAD_URL}"
+        fi
+
+    env:
+      TF_TOKEN: ${{ parameters.tfe_token }}
+      MODULE_VERSION_NUMBER: ${{ parameters.version_number }}
+      REQ_URL: https://${{ parameters.tfe_hostname }}/api/v2/registry-modules/$(tfe_org_name)/${{ parameters.module_full_name }}/${{ parameters.module_provider }}/versions
+    displayName: Create new TFE registry module version
+    # name: mod_new_ver
+    condition: succeeded()

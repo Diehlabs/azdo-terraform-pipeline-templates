@@ -1,0 +1,128 @@
+parameters:
+- name: golang_version
+  type: string
+
+- name: terratest_timeout
+  type: string
+
+- name: tf_run_dir
+  type: string
+  # default: $(System.DefaultWorkingDirectory)/examples/build
+
+- name: tests_dir
+  type: string
+  # default: $(System.DefaultWorkingDirectory)/test
+
+- name: tfe_token
+  type: string
+
+- name: tfvars_file_path
+  type: string
+  default: $(System.DefaultWorkingDirectory)/examples/build
+
+- name: remote_backend
+  type: string
+  default: false
+
+- name: vault_approle_id
+  type: string
+  default: ""
+
+- name: vault_wrapped_token
+  type: string
+  default: ""
+
+- name: terraform_version
+  type: string
+
+# -----------------------------------------------------------------------------
+# Format for passing SPN data as arm_credentials:
+#   ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+#   ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+#   ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+#   ARM_TENANT_ID: $(ARM_TENANT_ID)
+# -----------------------------------------------------------------------------
+- name: arm_credentials
+  type: object
+  default: []
+
+steps:
+  - template: steps-common.yml
+    parameters:
+      tf_run_dir: ${{ parameters.tf_run_dir }}
+      tfe_hostname: $(tfe_hostname)
+      tfe_token: ${{ parameters.tfe_token }}
+      workspace: $(Build.Repository.Name) # need to remove this for terratest?
+      tfvars_file_path: ${{ parameters.tfvars_file_path }}
+      remote_backend: false
+      tf_ws_run_dir: Null
+      tf_execution_mode: Null
+      terraform_version: ${{ parameters.terraform_version }}
+
+  - bash: |
+      echo "Golang version default: ${GOLANG_VERSION_DEFAULT}"
+      echo "Golang version specified by pipeline: ${{ parameters.golang_version }}"
+      FILE=$(Build.SourcesDirectory)/test/go.mod
+      if test -f "$FILE"; then
+          echo "$FILE exists."
+          status=true
+      else
+        status=False
+      fi
+      echo "Status $status"
+      echo "##vso[task.setvariable variable=doesModFileExist]$status"
+    displayName: Golang version
+
+  - task: GoTool@0
+    inputs:
+      version: ${{ parameters.golang_version }}
+
+  - task: Go@0
+    displayName: "Go mod init test"
+    inputs:
+      command: custom
+      customCommand: "mod"
+      arguments: "init test"
+      workingDirectory: ${{ parameters.tests_dir }}
+    condition: eq(variables.doesModFileExist, False)
+
+  # this is required for Golang v1.16 and newer
+  - ${{ if notIn('parameters.golang_version', '1.15') }}:
+      - task: Go@0
+        displayName: "Go mod tidy"
+        inputs:
+          command: custom
+          customCommand: "mod"
+          arguments: "tidy"
+          workingDirectory: ${{ parameters.tests_dir }}
+        condition: eq(variables.doesModFileExist, False)
+
+  - bash: |
+      # run go tests
+      go test -v -timeout ${{ parameters.terratest_timeout }} | tee test_output.log
+      # if terratest runs, but tests fail, the exit code is 1
+      echo "go test exit code: ${PIPESTATUS[0]}"
+      if [ "${PIPESTATUS[0]}" != "1" ]; then
+        exit ${PIPESTATUS[0]}
+      else
+        exit 0
+      fi
+    workingDirectory: ${{ parameters.tests_dir }}
+    displayName: "Run Terratest"
+    env:
+      ${{ if ne(parameters.vault_approle_id, '') }}:
+        VAULT_APPROLE_ID: ${{ parameters.vault_approle_id }}
+      ${{ if ne(parameters.vault_wrapped_token, '') }}:
+        VAULT_WRAPPED_TOKEN: ${{ parameters.vault_wrapped_token }}
+      ${{ each tfvar in variables }}:
+        ${{ if startsWith(tfvar.key, 'TFVAR') }}:
+          ${{ replace(tfvar.key, 'TFVAR', 'TF_VAR') }}: ${{ tfvar.value }}
+      ${{ if ne(parameters.arm_credentials, '') }}:
+        ARM_CLIENT_ID: ${{ parameters.arm_credentials.CLIENT_ID }}
+        ARM_CLIENT_SECRET: ${{ parameters.arm_credentials.CLIENT_SECRET }}
+        ARM_TENANT_ID: ${{ parameters.arm_credentials.TENANT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ parameters.arm_credentials.SUBSCRIPTION_ID }}
+        AZURE_CLIENT_ID: ${{ parameters.arm_credentials.CLIENT_ID }}
+        AZURE_CLIENT_SECRET: ${{ parameters.arm_credentials.CLIENT_SECRET }}
+        AZURE_TENANT_ID: ${{ parameters.arm_credentials.TENANT_ID }}
+        AZURE_SUBSCRIPTION_ID: ${{ parameters.arm_credentials.SUBSCRIPTION_ID }}
