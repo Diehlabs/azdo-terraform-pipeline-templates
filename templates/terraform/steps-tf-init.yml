@@ -1,0 +1,53 @@
+# Uses the specified version of tf binary to init, format and validate the code in the repo.
+parameters:
+- name: tf_run_dir
+  type: string
+
+- name: tf_workspace
+  type: string
+
+steps:
+# -----------------------------------------------------------------------------
+# This will restore the cached .terraform folder if a match is found based on
+# the restoreKeys.
+# -----------------------------------------------------------------------------
+  - task: Cache@2
+    inputs:
+      key: '%{{ parameters.tf_workspace }} | ${{ parameters.tf_run_dir }}/.terraform.lock.hcl'
+      path: ${{ parameters.tf_run_dir }}/.terraform
+      cacheHitVar: CACHE_RESTORED
+    displayName: Cache .terraform folder
+
+# -----------------------------------------------------------------------------
+# If the .terraform dir was restored from cache we don't need to re-init.
+# Otherwise `terraform init` should be run and another cache task will cache
+# the .terraform folder that was created.
+# -----------------------------------------------------------------------------
+  - bash: |
+      ##### Using the CLI args for plan/apply throws an error on "init"
+      unset TF_CLI_ARGS
+      ##### Terraform init
+      echo "##vso[task.setvariable variable=TF_INIT_RAN;isOutput=true]true"
+      $(Agent.TempDirectory)/terraform init
+    workingDirectory: ${{ parameters.tf_run_dir }}
+    displayName: Terraform INIT
+    condition: |
+      and(
+        succeeded(),
+        ne(variables.CACHE_RESTORED, true)
+      )
+
+  # -----------------------------------------------------------------------------
+  # Caching .terraform dir here should only happen if `terraform init` ran.
+  # This should create a new cached item.
+  # -----------------------------------------------------------------------------
+  - task: Cache@2
+    inputs:
+      key: '%{{ parameters.tf_workspace }} | ${{ parameters.tf_run_dir }}/.terraform.lock.hcl'
+      path: ${{ parameters.tf_run_dir }}/.terraform
+    displayName: Cache .terraform folder
+    condition: |
+      and(
+        succeeded(),
+        ne(variables.TF_INIT_RAN, true)
+      )

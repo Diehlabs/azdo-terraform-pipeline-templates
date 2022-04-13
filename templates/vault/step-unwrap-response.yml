@@ -1,0 +1,56 @@
+parameters:
+- name: vault_auth_token
+  type: string
+
+- name: wrapped_token
+  type: string
+
+steps:
+- bash: |
+    echo "vault_auth_token: ${VAULT_TOKEN}"
+    echo "wrapped_token: ${WRAPPED_TOKEN}"
+
+    generate_post_data() {
+    cat <<EOF
+    {
+      "token": "${WRAPPED_TOKEN}"
+    }
+    EOF
+    }
+
+    req_url="${VAULT_ADDR}/v1/sys/wrapping/unwrap"
+    echo "Performing unwrap with URL:"
+    echo $req_url
+
+    echo "Payload:"
+    echo $(generate_post_data) | jq -C .
+
+
+    UNWRAP_RESPONSE=$(curl \
+      --retry 5 \
+      --retry-delay 0 \
+      --retry-max-time 10 \
+      --silent \
+      --request POST \
+      --header "X-Vault-Token: ${VAULT_TOKEN}" \
+      --data "$(generate_post_data)" \
+      $req_url)
+
+    # echo "Debug:"
+    # echo $UNWRAP_RESPONSE | jq -C .
+
+    req_id="$(echo $UNWRAP_RESPONSE | jq -C .request_id)"
+
+    req_errors="$(echo $UNWRAP_RESPONSE | jq -C .errors)"
+    if [ -n "${req_errors}" ]; then
+      echo "Unwrap request ID: ${req_id}"
+      echo "##vso[task.setvariable variable=VAULT_SECRET_ID;issecret=true;isoutput=true]$(echo $UNWRAP_RESPONSE | jq -r .data.secret_id)"
+    else
+      echo $UNWRAP_RESPONSE | jq -C .
+      exit 1
+    fi
+  env:
+    WRAPPED_TOKEN: ${{ parameters.wrapped_token }}
+    VAULT_TOKEN: ${{ parameters.vault_auth_token }}
+  displayName: Unwrap a wrapped response
+  name: unwrap_secret_id

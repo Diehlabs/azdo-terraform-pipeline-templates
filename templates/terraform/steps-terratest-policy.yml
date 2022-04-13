@@ -1,0 +1,73 @@
+parameters:
+- name: terratest_timeout
+  type: string
+
+- name: tf_run_dir
+  type: string
+
+- name: tfe_token
+  type: string
+
+- name: tfvars_file_path
+  type: string
+
+- name: terraform_version
+  type: string
+
+steps:
+  - template: step-terraformrc.yml
+    parameters:
+      tfe_token: ${{ parameters.tfe_token }}
+
+  - template: step-tfvars.yml
+    parameters:
+      tf_run_dir: ${{ parameters.tf_run_dir }}
+      tfe_token: ${{ parameters.tfe_token }}
+
+  - template: step-download-tf-cli.yml
+    parameters:
+      terraform_version: ${{ terraform_version }}
+
+  - task: replacetokens@4
+    displayName: "Token replacement in Go test files"
+    inputs:
+      rootDirectory: "$(Build.SourcesDirectory)/"
+      targetFiles: "test/*.go"
+      encoding: "auto"
+      writeBOM: true
+      actionOnMissing: "silently continue"
+      keepToken: true
+      tokenPrefix: "$("
+      tokenSuffix: ")"
+
+  - task: GoTool@0
+    inputs:
+      version: 1.16.6
+
+  - task: Go@0
+    displayName: "Go init module"
+    inputs:
+      command: custom
+      customCommand: "mod"
+      arguments: "init test"
+      workingDirectory: "$(System.DefaultWorkingDirectory)/test"
+
+  - task: Go@0
+    displayName: "Pull down GO dependencies"
+    inputs:
+      command: custom
+      customCommand: "mod"
+      arguments: "tidy"
+      workingDirectory: "$(System.DefaultWorkingDirectory)/test"
+
+  - task: Go@0
+    displayName: "Run Terratest"
+    inputs:
+      command: "test"
+      arguments: "-v -timeout ${{ parameters.terratest_timeout }}"
+      workingDirectory: "$(System.DefaultWorkingDirectory)/test"
+    # Since AZDO uppercases all pipeline var names when setting them in env, we need to re-add with the correct/original casing.
+    env:
+      ${{ each tfvar in variables }}:
+        ${{ if startsWith(tfvar.key, 'TFVAR') }}:
+          ${{ replace(tfvar.key, 'TFVAR', 'TF_VAR') }}: ${{ tfvar.value }}

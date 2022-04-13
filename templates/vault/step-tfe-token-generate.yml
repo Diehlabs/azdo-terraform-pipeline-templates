@@ -1,0 +1,42 @@
+parameters:
+- name: vault_token
+  type: string
+
+- name: vault_role_name
+  type: string
+
+steps:
+  - bash: |
+      if [ ! -n "$VAULT_TOKEN" ]; then
+        echo "No Vault token was passed in? Value received:"
+        echo "$VAULT_TOKEN"
+      fi
+
+      req_url="${VAULT_ADDR}/v1/${VAULT_ROLE_NAME}"
+      TFE_TOKEN_RESPONSE=$(curl  \
+        --header "X-Vault-Token: ${VAULT_TOKEN}" \
+        --retry 5 \
+        --retry-delay 0 \
+        --retry-max-time 10 \
+        --silent \
+        --request GET \
+        "$req_url")
+
+      echo "Request URL: $req_url"
+      req_errors="$(echo "$LOGIN_RESPONSE" | jq .errors)"
+      if [ ! -n "$req_errors" ]; then
+        echo "Terraform Enterprise token ID:"
+        echo "$TFE_TOKEN_RESPONSE" | jq -C .data.token_id
+        tfe_token=$(echo "$TFE_TOKEN_RESPONSE" | jq -r .data.token)
+        echo "##vso[task.setvariable variable=TFE_TOKEN;isOutput=true;isSecret=true]${tfe_token}"
+      else
+        echo "Result was null, exiting."
+        echo "Full response:"
+        echo "$TFE_TOKEN_RESPONSE" | jq -C .
+        exit 1
+      fi
+    env:
+      VAULT_TOKEN: ${{ parameters.vault_token }}
+      VAULT_ROLE_NAME: ${{ parameters.vault_role_name }}
+    displayName: Vault create dynamic TFE token
+    name: tfe_get_token

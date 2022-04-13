@@ -1,0 +1,34 @@
+parameters:
+- name: tfe_token
+  type: string
+
+- name: module_provider
+  type: string
+
+- name: module_full_name
+  type: string
+
+steps:
+  - bash: |
+      echo "Deleting module: \"${{ parameters.module_full_name }}\""
+      echo "TFE API URL: ${TF_URL}"
+      RESULT=`curl \
+        --retry 5 \
+        --retry-delay 0 \
+        --retry-max-time 10 \
+        --silent \
+        -H "Content-Type: application/vnd.api+json" \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        --request POST \
+        $TF_URL`
+      echo "Returns nothing if successful:"
+      echo "raw RESULT: ${RESULT}"
+      echo $RESULT | jq -C .
+
+      if [ ! -z "$RESULT" ]; then
+        exit 1
+      fi
+    env:
+      TF_URL: https://$(tfe_hostname)/api/v2/registry-modules/actions/delete/$(tfe_org_name)/${{ parameters.module_full_name }}/${{ parameters.module_provider }}
+      SECRET: ${{ parameters.tfe_token }}
+    displayName: Delete module

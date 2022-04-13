@@ -1,0 +1,48 @@
+parameters:
+- name: terraform_version
+  type: string
+
+steps:
+# - bash: pwd && tree
+#   displayName: debug
+#   workingDirectory: $(Build.SourcesDirectory)
+
+- task: Bash@3
+  inputs:
+    targetType: inline
+    failOnStderr: false
+    workingDirectory: $(Agent.TempDirectory)
+    script: |
+      if [ -n "$TF_CLI_VERSION" ]; then
+          echo "TF_CLI_VERSION variable is set: ${TF_CLI_VERSION}"
+          echo "This repository requires Terraform version ${TF_CLI_VERSION}"
+      else
+          err_msg="TF_CLI_VERSION variable is not set!"
+          echo "You MUST include a TF_CLI_VERSION variable in this pipeline!"
+          echo ${err_msg}
+          exit 1
+      fi
+
+      echo "Terraform CLI version download URL:"
+      echo "${TF_DL_URL}"
+
+      MY_OUTPUT=$(curl \
+        --retry 5 \
+        --retry-delay 0 \
+        --retry-max-time 10 \
+        --request GET \
+        -o "${AGENT_TEMPDIRECTORY}/terraform.zip" \
+        ${TF_DL_URL})
+
+      echo $MY_OUTPUT | jq -C .
+      unzip "${AGENT_TEMPDIRECTORY}/terraform.zip" &&\
+      chmod +x "${AGENT_TEMPDIRECTORY}/terraform" &&\
+      rm "${AGENT_TEMPDIRECTORY}/terraform.zip"
+
+  env:
+    TF_CLI_VERSION: ${{ parameters.terraform_version }}
+    TF_DL_URL: https://releases.hashicorp.com/terraform/${{ parameters.terraform_version }}/terraform_${{ parameters.terraform_version }}_linux_amd64.zip
+
+  condition: succeeded()
+  name: download_tf_cli
+  displayName: Terraform - Download

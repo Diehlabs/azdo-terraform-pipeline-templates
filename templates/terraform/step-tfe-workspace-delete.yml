@@ -1,0 +1,43 @@
+parameters:
+  - name: tfe_token
+    type: string
+
+  - name: workspace_names
+    type: object
+
+steps:
+  - ${{ each ws_to_delete in parameters.workspace_names }}:
+    - bash: |
+        echo "Deleting workspace: \"${{ ws_to_delete }}\""
+        echo "TFE API URL: ${TF_URL}"
+        RESULT=`curl \
+          --retry 5 \
+          --retry-delay 0 \
+          --retry-max-time 10 \
+          --silent \
+          -H "Content-Type: application/vnd.api+json" \
+          -H "Authorization: Bearer $SECRET" \
+          --request DELETE \
+          $TF_URL`
+        echo "raw RESULT: ${RESULT}"
+
+        if [ "${RESULT}" = "null" ]; then
+          echo "Result of \"null\" means good to go."
+          echo "Workspace deleted!"
+          exit 0
+        fi
+
+        if [ -n "${RESULT}" ]; then
+          ERROR=$(echo $RESULT | jq .errors)
+          if [ "${ERROR}" != null ]; then
+            STATUS=$(echo $RESULT | jq .errors[0].status)
+            echo "HTTP Status: ${STATUS}"
+            exit 1
+          fi
+        fi
+      displayName: Delete ${{ ws_to_delete }} Workspace
+      name: ws_${{ ws_to_delete }}
+      env:
+        SECRET: ${{ parameters.tfe_token }}
+        TF_URL: https://$(tfe_hostname)/api/v2/organizations/$(tfe_org_name)/workspaces/${{ ws_to_delete }}
+      #condition: succeeded()

@@ -1,0 +1,93 @@
+parameters:
+- name: module_version_number
+  type: string
+
+- name: module_provider
+  type: string
+
+- name: module_full_name
+  type: string
+
+- name: module_archive_name
+  type: string
+
+- name: tfe_token
+  type: string
+
+- name: tfe_hostname
+  type: string
+
+- name: depends_on
+  type: object
+  default: []
+
+jobs:
+- job: publish_module
+  displayName: Publish TFE module
+  dependsOn: ${{ parameters.depends_on }}
+  #---------------------------------------------------------------------------------------------
+  # Include prod TFE variables during publish since we won't be publishing to non-prod.
+  #---------------------------------------------------------------------------------------------
+  variables:
+    - group: azdo-terraform-pipeline-templates-prod
+    #---------------------------------------------------------------------------------------------
+    # Have to define this param as a var since when it's passed in it's a dependency
+    #---------------------------------------------------------------------------------------------
+    - name: tfe_token_dynamic
+      value: ${{ parameters.tfe_token }}
+  steps:
+    - bash: |
+        printenv | sort
+      displayName: Output env vars
+
+    - bash: |
+        if [ ! -n "$TFE_TOKEN" ]; then
+          echo "No TFE token was passed in? Value received:"
+          echo "$TFE_TOKEN"
+          exit 1
+        else
+          echo "Found TFE token. Value received:"
+          echo "$TFE_TOKEN"
+        fi
+      displayName: Verify TFE token
+      env:
+        TFE_TOKEN: $(tfe_token_dynamic)
+
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        source: current
+        artifact: ${{ parameters.module_full_name }}
+        path: $(Agent.TempDirectory)
+      displayName: Download module archive
+
+    - template: steps-module-ensure-exists.yml
+      parameters:
+        tfe_token: $(tfe_token_dynamic)
+        module_provider: ${{ parameters.module_provider }}
+        module_full_name: ${{ parameters.module_full_name }}
+        tfe_hostname: ${{ parameters.tfe_hostname }}
+
+    - template: steps-module-create-new-version.yml
+      parameters:
+        tfe_token: $(tfe_token_dynamic)
+        module_provider: ${{ parameters.module_provider }}
+        module_full_name: ${{ parameters.module_full_name }}
+        version_number: ${{ parameters.module_version_number }}
+        tfe_hostname: ${{ parameters.tfe_hostname }}
+
+    - template: steps-module-upload.yml
+      parameters:
+        tfe_token: $(tfe_token_dynamic)
+        module_archive_name: ${{ parameters.module_archive_name }}
+        tfe_hostname: ${{ parameters.tfe_hostname }}
+
+    - template: ../general/steps-git-tags.yml
+      parameters:
+        git_tag: ${{ parameters.module_version_number }}
+
+- job: publish_graph
+  displayName: Publish Terraform graph
+  steps:
+    - template: steps-graph-dl+publish.yml
+      parameters:
+        graph_file_name: ${{ parameters.module_full_name }}.pdf

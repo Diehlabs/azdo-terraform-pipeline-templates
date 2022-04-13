@@ -1,0 +1,13 @@
+parameters:
+  - name: git_tag
+    type: string
+
+steps:
+  - checkout: self
+    clean: 'true'
+    persistCredentials: 'true'
+  - bash: |
+        echo "Tagging $(Build.Repository.Name) with v${{ parameters.git_tag }}"
+        git tag "v${{ parameters.git_tag }}"
+        git push origin "v${{ parameters.git_tag }}"
+    displayName: Set Git Tags

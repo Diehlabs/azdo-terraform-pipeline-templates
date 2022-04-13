@@ -1,0 +1,44 @@
+parameters:
+- name: tfe_token
+  type: string
+
+- name: tf_run_dir
+  type: string
+  default: ''
+
+- name: depends_on
+  type: object
+  default: []
+
+jobs:
+- job: checkov_analysis
+  dependsOn: ${{ parameters.depends_on }}
+  displayName: Checkov compliance scan
+  variables:
+    - name: SCAN_DIR
+      ${{ if eq(parameters.tf_run_dir, '') }}:
+        value: $(Build.SourcesDirectory)
+      ${{ else }}:
+        value: $(Build.SourcesDirectory)/${{ parameters.tf_run_dir }}
+
+  steps:
+  - bash: |
+      # --external-checks-git <repo_url>
+      docker run --rm \
+        --volume "$(SCAN_DIR)":/code bridgecrew/checkov \
+        --framework terraform \
+        --directory /code \
+        --output junitxml \
+        --soft-fail > $(Agent.TempDirectory)/checkov.xml
+      echo "Note that if there are no applicable polices for the resources defined, the output will be blank. This does not indicate an error in Checkov."
+    displayName: "Checkov scan"
+
+  - task: PublishTestResults@2
+    condition: succeeded()
+    inputs:
+      testRunTitle: Checkov IaC Analysis
+      failTaskOnFailedTests: false
+      testResultsFormat: JUnit
+      testResultsFiles: "checkov.xml"
+      searchFolder: $(Agent.TempDirectory)
+    displayName: Checkov publish results

@@ -1,0 +1,67 @@
+parameters:
+  - name: tfe_token
+    type: string
+    default: $(tfe_token)
+
+  - name: workspace_names
+    type: object
+
+steps:
+  - ${{ each new_ws_name in parameters.workspace_names }}:
+    - bash: |
+        echo "Creating workspace: ${{ new_ws_name }}"
+        echo "TFE API URL: ${TF_URL}"
+
+        generate_post_data() {
+        cat <<EOF
+        {
+          "data": {
+            "type": "workspaces",
+            "attributes": {
+              "name": "${{ new_ws_name }}"
+            }
+          }
+        }
+        EOF
+        }
+
+        echo "Payload:"
+        echo $(generate_post_data) | jq -C .
+
+        RESPONSE=$(curl \
+          --retry 5 \
+          --retry-delay 0 \
+          --retry-max-time 10 \
+          --silent \
+          -H "Content-Type: application/vnd.api+json" \
+          -H "Authorization: Bearer $SECRET" \
+          -d "$(generate_post_data)" \
+          --request POST \
+          $TF_URL)
+
+        echo "Request response:"
+        echo $RESPONSE | jq -C .
+
+        req_errors="$(echo $RESPONSE | jq -C .errors)"
+        if [ -n "${req_errors}" ]; then
+          echo "Created workspace: ${{ new_ws_name }}"
+          exit 0
+        else
+          error_status=$(echo $RESPONSE | jq -r .errors[0].status)
+          if [ $error_status != 422 ]; then
+            exit 1
+          else
+            echo "HTTP 422 means that the workspace already exists, continuing.."
+            exit 0
+          fi
+        fi
+
+        # catch all
+        echo "Raw response:"
+        echo $RESPONSE
+
+      displayName: Create ${{ new_ws_name }} Workspace
+      name: ws_${{ new_ws_name }}
+      env:
+        SECRET: ${{ parameters.tfe_token }}
+        TF_URL: https://$(tfe_hostname)/api/v2/organizations/$(tfe_org_name)/workspaces

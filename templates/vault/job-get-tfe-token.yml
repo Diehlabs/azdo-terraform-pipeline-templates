@@ -1,0 +1,30 @@
+parameters:
+- name: depends_on
+  type: object
+  default: []
+
+- name: VAULT_APPROLE_ID
+  type: string
+
+- name: VAULT_APPROLE_SECRET
+  type: string
+
+- name: VAULT_BACKEND_ROLE_NAME
+  type: string
+
+jobs:
+- job: get_tfe_token
+  dependsOn: ${{ parameters.depends_on }}
+  workspace:
+    clean: resources
+  displayName: Generate TFE API token
+  steps:
+  - template: ../vault/step-auth-approle.yml
+    parameters:
+      approle_id: ${{ parameters.VAULT_APPROLE_ID }}
+      approle_secret_id: ${{ parameters.VAULT_APPROLE_SECRET }}
+
+  - template: ../vault/step-tfe-token-generate.yml
+    parameters:
+      vault_token: $(auth_approle.VAULT_TOKEN)
+      vault_role_name: ${{ parameters.VAULT_BACKEND_ROLE_NAME }}

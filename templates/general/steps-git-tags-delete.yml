@@ -1,0 +1,13 @@
+parameters:
+  - name: git_tag
+    type: string
+
+steps:
+  - checkout: self
+    clean: 'true'
+    persistCredentials: 'true'
+  - bash: |
+        echo "Deleting tag ${{ parameters.git_tag }} from $(Build.Repository.Name)"
+        git tag -d "${{ parameters.git_tag }}"
+        git push --delete origin "${{ parameters.git_tag }}"
+    displayName: Set Git Tags

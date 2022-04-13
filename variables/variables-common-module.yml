@@ -1,0 +1,8 @@
+variables:
+# Golang version to use for Terratest
+- name: golang_version_default
+  value: '1.16.12'
+
+# Terratest timeout. Must be enough time to create/test/destroy everything being tested.
+- name: terratest_timeout_default
+  value: $[ coalesce(variables.terratest_timeout, '10m') ]

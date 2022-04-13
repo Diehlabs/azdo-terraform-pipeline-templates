@@ -1,0 +1,24 @@
+parameters:
+  - name: tests_dir  # added to ensure new steps are compat with original stage templates for v5.6
+    type: string
+    default: test
+
+steps:
+  - bash: |
+      DOWNLOAD_URL=$(curl https://api.github.com/repos/gruntwork-io/terratest/releases/latest -k -s |jq -r  '.assets[] | select(.name == "terratest_log_parser_linux_amd64").browser_download_url')
+      curl --location --silent --fail --show-error -o $(Agent.TempDirectory)/terratest_log_parser $DOWNLOAD_URL &&\
+        chmod +x $(Agent.TempDirectory)/terratest_log_parser
+    workingDirectory: ${{ parameters.tests_dir }}
+    displayName: 'Download Terratest Log Parser'
+
+  - bash: |
+      $(Agent.TempDirectory)/terratest_log_parser -testlog test_output.log -outputdir test_output
+    workingDirectory: ${{ parameters.tests_dir }}
+    displayName: 'Run Terratest Log Parser'
+
+  - task: PublishTestResults@2
+    condition: succeeded()
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: '**/report.xml'
+      failTaskOnFailedTests: true

@@ -1,0 +1,40 @@
+parameters:
+# Move venafi host to var group or other shared vars
+- name: venafi_host
+  type: string
+  default: aocsecvenafi01.acf.americredit.com
+
+- name: venafi_user
+  type: string
+
+- name: venafi_pass
+  type: string
+
+- name: tfvars_file_name
+  type: string
+  default: venafi.auto.tfvars
+
+- name: tfvars_file_path
+  type: string
+
+steps:
+  - bash: |
+      echo "##[command] Calling ${{ parameters.venafi_host }} to retrieve API token"
+      data="{\"Username\":\"${{ parameters.venafi_user }}\",\"Password\":\"${{ parameters.venafi_pass }}\"}"
+      response=$(curl --silent -H "Content-Type: application/json" -d "$data" https://${{ parameters.venafi_host }}/vedsdk/authorize/)
+      if [ -z "${response}" ]; then
+        echo "##[error]Unable to get token from Venafi, no response returned"
+        exit 1
+      fi
+      access_token=$(echo $response | jq -r '.APIKey')
+      if [ "$access_token" = "null" ]; then
+        echo "##[error]Unable to get token from Venafi, full response: "
+        echo "$(echo $response | jq '.')"
+        exit 1
+      else
+        echo "Successfully recieved API token"
+        echo "##vso[task.setvariable variable=venafi_token]$access_token"
+        echo "venafi_token = \"${access_token}\"" > ${{ parameters.tfvars_file_path }}/${{ parameters.tfvars_file_name }}
+      fi
+    condition: succeeded()
+    displayName: Obtain API token from Venafi

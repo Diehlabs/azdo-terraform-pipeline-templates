@@ -1,0 +1,64 @@
+parameters:
+- name: tfe_token
+  type: string
+
+- name: tf_run_dir
+  type: string
+
+- name: module_root_dir
+  type: string
+
+- name: module_archive_name
+  type: string
+
+- name: module_full_name
+  type: string
+
+- name: pre_steps
+  type: stepList
+  default: []
+
+- name: terraform_version
+  type: string
+
+jobs:
+  - job: create_graph
+    workspace:
+      clean: resources
+    steps:
+      - ${{ if parameters.pre_steps }}:
+        - ${{ parameters.pre_steps }}
+      - template: steps-graph-create.yml
+        parameters:
+          graph_run_dir:  ${{ parameters.module_root_dir }}
+          graph_file_name: ${{ parameters.module_full_name }}.pdf
+          terraform_version: ${{ parameters.terraform_version }}
+    displayName: Create TF Graph
+
+  - job: create_module
+    dependsOn: create_graph
+    displayName: Create TF module archive
+    steps:
+      - bash: |
+          #!/bin/bash
+          rm -rfv ./{.gitignore,.git,.terraform,examples,test,*.template}
+          find ./ -iname "*.yml" -exec rm {} \;
+        displayName: "Cleanup before archiving module"
+        workingDirectory: ${{ parameters.module_root_dir }}
+
+      - task: ArchiveFiles@2
+        inputs:
+          rootFolderOrFile: ${{ parameters.module_root_dir }}
+          includeRootFolder: false
+          archiveType: tar
+          tarCompression: gz
+          archiveFile: $(Build.ArtifactStagingDirectory)/${{ parameters.module_archive_name }}
+          replaceExistingArchive: true
+          verbose: true
+
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish module archive to pipeline"
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/${{ parameters.module_archive_name }}
+          artifactName: ${{ parameters.module_full_name }}
+          artifactType: pipeline
